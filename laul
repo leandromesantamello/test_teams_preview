@@ -1,0 +1,507 @@
+import requests
+import json
+import pandas as pd
+import numpy as np
+from keras.models import Sequential
+from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from keras.optimizers import Adam
+
+# Definições
+
+TIME_01 = "rwanda-police fc"
+TIME_02 = "gorilla fc"
+
+# Links
+
+LINK_DADOS_TIME_01 = "https://www.sofascore.com/pt/time/futebol/rwanda-police-fc/199921"
+LINK_DADOS_TIME_02 = "https://www.sofascore.com/pt/time/futebol/gorilla-fc/340351"
+LINK_PARA_DADOS_COMPLEMENTARES = "https://www.sofascore.com/pt/gorilla-fc-rwanda-police-fc/wYEbsbhLc#11498296"
+LINK_PARA_PREVISAO_DO_TEMPO = "https://api.openweathermap.org/data/2.5/weather?q=kigali&appid=1823aca501e0cb4ba877b88a53bcd82e"
+
+# Dados complementares
+
+def get_dados_complementares(link):
+    response = requests.get(link)
+    data = response.json()
+
+    return {
+        "data": data["match"]["date"],
+        "hora": data["match"]["time"],
+        "estadio": data["match"]["venue"]["name"],
+        "local": data["match"]["venue"]["city"],
+        "arbitro": data["match"]["referee"]["name"],
+        "media_cartoes": data["match"]["statistics"]["cards"]["total"],
+    }
+
+dados_complementares = get_dados_complementares(LINK_PARA_DADOS_COMPLEMENTARES)
+
+# Previsão do tempo
+
+def get_previsao_do_tempo(link, api_key):
+    response = requests.get(link, headers={"x-api-key": api_key})
+    data = response.json()
+
+    if data["weather"][0]["main"] == "Rain":
+        return "Molhado"
+    else:
+        return "Seco"
+
+previsao_do_tempo = get_previsao_do_tempo(LINK_PARA_PREVISAO_DO_TEMPO, API_KEY)
+
+# Dados dos últimos 15 jogos
+
+def get_dados_ultimos_15_jogos(link):
+    response = requests.get(link)
+    data = response.json()
+
+    dados = []
+    for jogo in data["matches"]:
+        dados.append({
+            "data": jogo["date"],
+            "hora": jogo["time"],
+            "adversario": jogo["opponent"]["name"],
+            "placar": jogo["score"],
+            "gols": jogo["statistics"]["goals"]["total"],
+            "escanteios": jogo["statistics"]["corners"]["total"],
+            "cartoes_amarelos": jogo["statistics"]["cards"]["yellow"],
+            "cartoes_vermelhos": jogo["statistics"]["cards"]["red"],
+        })
+
+    return pd.DataFrame(dados)
+
+dados_time_01 = get_dados_ultimos_15_jogos(LINK_DADOS_TIME_01)
+dados_time_02 = get_dados_ultimos_15_jogos(LINK_DADOS_TIME_02)
+
+# Análise dos dados
+
+# Notas dos jogadores atacantes
+
+def get_notas_jogadores_atacantes(dados):
+    notas_atacantes = []
+    for jogo in dados.iterrows():
+        notas_atacantes.append(jogo[1]["gols"] + jogo[1]["assistencias"])
+
+    return notas_atacantes
+
+notas_atacantes_time_01 = get_notas_jogadores_atacantes(dados_time_01)
+notas_atacantes_time_02 = get_notas_jogadores_atacantes(dados_time_02)
+
+# Notas dos jogadores defensivos
+
+def get_notas_jogadores_defesivos(dados):
+    notas_defesivos = []
+    for jogo in dados.iterrows():
+        notas_defesivos.append(jogo[1]["desarmes"] + jogo[1]["interceptacoes"] + jogo[1]["salvos"])
+
+    return notas_defesivos
+
+notas_defesivos_time_01 = get_notas_jogadores_defesivos(dados_time_01)
+notas_defesivos_time_02 = get_notas_jogadores_defesivos(dados_time_02)
+
+# Intensidade do ataque
+
+def get_intensidade_ataque(notas_atacantes):
+    return np.mean(notas_atacantes)
+
+intensidade_ataque_time_01 = get_intensidade_ataque(notas_atacantes_time_01)
+intensidade_ataque_time_02 = get_intensidade_ataque(notas_atacantes_time_02)
+
+# Solidez da defesa
+
+def get_solidez_defesa(notas_defesivos):
+    return np.mean(notas_defesivos)
+
+solidez_defesa_time_01 = get_solidez_defesa(notas_defesivos_time_01)
+solidez_defesa_time_02 = get_solidez_defesa(notas_defesivos_time_02)
+
+# Escalação e formação tática
+
+def get_escalacao_formacao(dados):
+    escalacao = []
+    for jogo in dados.iterrows():
+        escalacao.append(jogo[1]["lineup"])
+
+    return escalacao
+
+escalacao_time_01 = get_escalacao_formacao(dados_time_01)
+escalacao_time_02 = get_escalacao_formacao(dados_time_02)
+
+# Desempenho dos confrontos diretos
+
+def get_desempenho_confrontos_diretos(dados):
+    desempenho = []
+    for jogo in dados.iterrows():
+        if jogo[1]["placar"][0] > jogo[1]["placar"][1]:
+            desempenho.append(1)
+        elif jogo[1]["placar"][0] < jogo[1]["placar"][1]:
+            desempenho.append(-1)
+        else:
+            desempenho.append(0)
+
+    return desempenho
+
+desempenho_confrontos_diretos = get_desempenho_confrontos_diretos(dados_complementares)
+
+# Desempenho após sair perdendo
+
+def get_desempenho_apos_perder(dados):
+    desempenho = []
+    for jogo in dados.iterrows():
+        if jogo[1]["placar"][0] < jogo[1]["placar"][1]:
+            desempenho.append(jogo[1]["placar"][0])
+        else:
+            desempenho.append(None)
+
+    return desempenho
+
+desempenho_apos_perder_time_01 = get_desempenho_apos_perder(dados_time_01)
+desempenho_apos_perder_time_02 = get_desempenho_apos_perder(dados_time_02)
+
+# Grau de importância do duelo
+
+def get_grau_importacao(dados):
+    importancia = []
+    for jogo in dados.iterrows():
+        if jogo[1]["placar"][0] > jogo[1]["placar"][1]:
+            importancia.append(1)
+        elif jogo[1]["placar"][0] < jogo[1]["placar"][1]:
+            importancia.append(-1)
+        else:
+            importancia.append(0)
+
+    return importancia
+
+grau_importacao = get_grau_importacao(dados_complementares)
+
+# Estatísticas da temporada
+
+def get_estatisticas_temporada(dados):
+    estatisticas = []
+    for jogo in dados.iterrows():
+        estatisticas.append({
+            "gols": jogo[1]["gols"],
+            "escanteios": jogo[1]["escanteios"],
+            "cartoes_amarelos": jogo[1]["cartoes_amarelos"],
+            "cartoes_vermelhos": jogo[1]["cartoes_vermelhos"],
+        })
+
+    return estatisticas
+
+estatisticas_temporada_time_01 = get_estatisticas_temporada(dados_time_01)
+estatisticas_temporada_time_02 = get_estatisticas_temporada(dados_time_02)
+
+# Forma recente
+
+def get_forma_recente(dados):
+    forma = []
+    for jogo in dados.iterrows():
+        if jogo[1]["placar"][0] > jogo[1]["placar"][1]:
+            forma.append("V")
+        elif jogo[1]["placar"][0] < jogo[1]["placar"][1]:
+            forma.append("D")
+        else:
+            forma.append("E")
+
+    return forma
+
+forma_recente_time_01 = get_forma_recente(dados_time_01)
+forma_recente_time_02 = get_forma_recente(dados_time_02)
+
+# Desfalques
+
+def get_desfalques(dados):
+    desfalques = []
+    for jogo in dados.iterrows():
+        desfalques.append(jogo[1]["desfalques"])
+
+    return desfalques
+
+desfalques_time_01 = get_desfalques(dados_time_01)
+desfalques_time_02 = get_desfalques(dados_time_02)
+
+# Cartões
+
+def get_cartoes(dados):
+    cartoes = []
+    for jogo in dados.iterrows():
+        cartoes.append({
+            "amarelos": jogo[1]["cartoes_amarelos"],
+            "vermelhos": jogo[1]["cartoes_vermelhos"],
+        })
+
+    return cartoes
+
+cartoes_time_01 = get_cartoes(dados_time_01)
+cartoes_time_02 = get_cartoes(dados_time_02)
+
+# Média de cartões do árbitro
+
+media_cartoes_arbitro = dados_complementares["media_cartoes"]
+
+# Desempenho com desfalques
+
+def get_desempenho_com_desfalques(dados, desfalques):
+    desempenho = []
+    for jogo in dados.iterrows():
+        if jogo[1]["desfalques"]:
+            desempenho.append(jogo[1]["placar"][0])
+        else:
+            desempenho.append(None)
+
+    return desempenho
+
+desempenho_com_desfalques_time_01 = get_desempenho_com_desfalques(dados_time_01, desfalques_time_01)
+desempenho_com_desfalques_time_02 = get_desempenho_com_desfalques(dados_time_02, desfalques_time_02)
+
+# Comparação de notas
+
+def get_comparacao_notas(notas_atacantes_01, notas_atacantes_02, notas_defesivos_01, notas_defesivos_02):
+    return {
+        "intensidade_ataque": notas_atacantes_01 - notas_atacantes_02,
+        "solidez_defesa": notas_defesivos_02 - notas_defesivos_01,
+    }
+
+comparacao_notas = get_comparacao_notas(
+    notas_atacantes_time_01, notas_atacantes_time_02, notas_defesivos_time_01, notas_defesivos_time_02
+)
+
+# Estilo de jogo
+
+def get_estilo_jogo(dados):
+    estilo = []
+    for jogo in dados.iterrows():
+        if jogo[1]["placar"][0] > jogo[1]["placar"][1]:
+            estilo.append("Agressivo")
+        elif jogo[1]["placar"][0] < jogo[1]["placar"][1]:
+            estilo.append("Defensivo")
+        else:
+            estilo.append("Equilíbrio")
+
+    return estilo
+
+estilo_jogo_time_01 = get_estilo_jogo(dados_time_01)
+estilo_jogo_time_02 = get_estilo_jogo(dados_time_02)
+
+# Desempenho em condições climáticas chuvosas
+
+def get_desempenho_chuva(dados):
+    desempenho = []
+    for jogo in dados.iterrows():
+        if jogo[1]["condicoes_chuvosas"]:
+            desempenho.append(jogo[1]["placar"][0])
+        else:
+            desempenho.append(None)
+
+    return desempenho
+
+desempenho_chuva_time_01 = get_desempenho_chuva(dados_time_01)
+desempenho_chuva_time_02 = get_desempenho_chuva(dados_time_02)
+
+# Fator casa
+
+def get_fator_casa(dados):
+    desempenho = []
+    for jogo in dados.iterrows():
+        if jogo[1]["localidade"] == dados_complementares["local"]:
+            desempenho.append(jogo[1]["placar"][0])
+        else:
+            desempenho.append(jogo[1]["placar"][1])
+
+    return desempenho
+
+fator_casa_time_01 = get_fator_casa(dados_time_01)
+fator_casa_time_02 = get_fator_casa(dados_time_02)
+
+# Motivação
+
+def get_motivacao(dados):
+    motivacao = []
+    for jogo in dados.iterrows():
+        if jogo[1]["placar"][0] < jogo[1]["placar"][1]:
+            motivacao.append("Alta")
+        elif jogo[1]["placar"][0] > jogo[1]["placar"][1]:
+            motivacao.append("Baixa")
+        else:
+            motivacao.append("Média")
+
+    return motivacao
+
+motivacao_time_01 = get_motivacao(dados_time_01)
+motivacao_time_02 = get_motivacao(dados_time_02)
+
+# Lesões
+
+def get_lesoes(dados):
+    lesoes = []
+    for jogo in dados.iterrows():
+        lesoes.append(jogo[1]["lesoes"])
+
+    return lesoes
+
+lesoes_time_01 = get_lesoes(dados_time_01)
+lesoes_time_02 = get_lesoes(dados_time_02)
+
+# Disciplina
+
+def get_disciplina(dados):
+    disciplina = []
+    for jogo in dados.iterrows():
+        disciplina.append(jogo[1]["cartoes"])
+
+    return disciplina
+
+disciplina_time_01 = get_disciplina(dados_time_01)
+disciplina_time_02 = get_disciplina(dados_time_02)
+
+# Previsões
+
+# Probabilidade de vitória
+
+def get_probabilidade_vitoria(comparacao_notas, desempenho_confrontos_diretos):
+    if comparacao_notas["intensidade_ataque"] > 0:
+        probabilidade = 0.6
+    elif comparacao_notas["intensidade_ataque"] < 0:
+        probabilidade = 0.4
+    else:
+        probabilidade = 0.5
+
+    if desempenho_confrontos_diretos > 0:
+        probabilidade += 0.1
+    elif desempenho_confrontos_diretos < 0:
+        probabilidade -= 0.1
+
+    return probabilidade
+
+probabilidade_vitoria_time_01 = get_probabilidade_vitoria(comparacao_notas, desempenho_confrontos_diretos)
+probabilidade_vitoria_time_02 = get_probabilidade_vitoria(comparacao_notas, desempenho_confrontos_diretos)
+
+# Probabilidade de empate
+
+def get_probabilidade_empate(desempenho_com_desfalques_time_01, desempenho_com_desfalques_time_02):
+    if desempenho_com_desfalques_time_01 > desempenho_com_desfalques_time_02:
+        probabilidade = 0.6
+    elif desempenho_com_desfalques_time_01 < desempenho_com_desfalques_time_02:
+        probabilidade = 0.4
+    else:
+        probabilidade = 0.5
+
+    return probabilidade
+
+probabilidade_empate_time_01 = get_probabilidade_empate(desempenho_com_desfalques_time_01, desempenho_com_desfalques_time_02)
+probabilidade_empate_time_02 = get_probabilidade_empate(desempenho_com_desfalques_time_01, desempenho_com_desfalques_time_02)
+
+# Probabilidade de derrota
+
+def get_probabilidade_derrota(probabilidade_vitoria, probabilidade_empate):
+    return 1 - probabilidade_vitoria - probabilidade_empate
+
+probabilidade_derrota_time_01 = get_probabilidade_derrota(probabilidade_vitoria_time_01, probabilidade_empate_time_01)
+probabilidade_derrota_time_02 = get_probabilidade_derrota(probabilidade_vitoria_time_02, probabilidade_empate_time_02)
+
+# Probabilidade de quantidade de gols
+
+def get_probabilidade_quantidade_gols(media_gols_time_01, media_gols_time_02):
+    if media_gols_time_01 > media_gols_time_02:
+        probabilidade_gols_01 = 0.6
+        probabilidade_gols_02 = 0.4
+    else:
+        probabilidade_gols_01 = 0.4
+        probabilidade_gols_02 = 0.6
+
+    return probabilidade_gols_01, probabilidade_gols_02
+
+probabilidade_gols_01, probabilidade_gols_02 = get_probabilidade_quantidade_gols(
+    media_gols_time_01, media_gols_time_02
+)
+
+# Probabilidade de quantidade de escanteios
+
+def get_probabilidade_quantidade_escanteios(media_escanteios_time_01, media_escanteios_time_02):
+    if media_escanteios_time_01 > media_escanteios_time_02:
+        probabilidade_escanteios_01 = 0.6
+        probabilidade_escanteios_02 = 0.4
+    else:
+        probabilidade_escanteios_01 = 0.4
+        probabilidade_escanteios_02 = 0.6
+
+    return probabilidade_escanteios_01, probabilidade_escanteios_02
+
+probabilidade_escanteios_01, probabilidade_escanteios_02 = get_probabilidade_quantidade_escanteios(
+    media_escanteios_time_01, media_escanteios_time_02
+)
+
+# Exibição das probabilidades de quantidade de escanteios
+
+print(
+    f"Probabilidade de {media_escanteios_time_01} escanteios para o Time 01: {probabilidade_escanteios_01}"
+)
+print(
+    f"Probabilidade de {media_escanteios_time_02} escanteios para o Time 02: {probabilidade_escanteios_02}"
+)
+
+
+
+# Probabilidade de quantidade de cartões
+
+def get_probabilidade_quantidade_cartoes(media_cartoes_time_01, media_cartoes_time_02):
+    if media_cartoes_time_01 > media_cartoes_time_02:
+        probabilidade_cartoes_01 = 0.6
+        probabilidade_cartoes_02 = 0.4
+    else:
+        probabilidade_cartoes_01 = 0.4
+        probabilidade_cartoes_02 = 0.6
+
+    return probabilidade_cartoes_01, probabilidade_cartoes_02
+
+probabilidade_cartoes_01, probabilidade_cartoes_02 = get_probabilidade_quantidade_cartoes(
+    media_cartoes_time_01, media_cartoes_time_02
+)
+
+# Geração da tabela de prognósticos
+
+tabela_pronosticos = pd.DataFrame({
+    "Time": ["Time 01", "Time 02"],
+    "Vitória": [probabilidade_vitoria_time_01, probabilidade_vitoria_time_02],
+    "Empate": [probabilidade_empate_time_01, probabilidade_empate_time_02],
+    "Derrota": [probabilidade_derrota_time_01, probabilidade_derrota_time_02],
+    "Quantidade de gols": [probabilidade_gols_01, probabilidade_gols_02],
+    "Quantidade de escanteios": [probabilidade_escanteios_01, probabilidade_escanteios_02],
+    "Quantidade de cartões": [probabilidade_cartoes_01, probabilidade_cartoes_02],
+})
+
+# Exibição da tabela de prognósticos
+
+print(tabela_pronosticos.to_string())
+
+# Exibição da tabela de prognósticos
+
+print(
+    """
+    | Time | Vitória | Empate | Derrota | Quantidade de gols | Quantidade de escanteios | Quantidade de cartões |
+    |---|---|---|---|---|---|---|
+    """
+    + tabela_pronosticos.to_string()
+)
+
+# Exibição da tabela de prognósticos
+
+print(
+    """
+    | Time | Vitória | Empate | Derrota | Quantidade de gols | Quantidade de escanteios | Quantidade de cartões |
+    |---|---|---|---|---|---|---|
+    """
+    + tabela_pronosticos.to_string()
+    + """
+    |---|---|---|---|---|---|---|
+    """
+)
+
+# Exibição da tabela de prognósticos
+
+print(
+    """
+    | Time | Vitória | Empate | Derrota | Quantidade de gols | Quantidade de escanteios | Quantidade de cartões |
+    |---|---|---|---|---|---|---|
+    """
+    + tabela_pronosticos.style.set_table_styles([{'width': '100px'} for i in range(7)]).to_string()
+)
